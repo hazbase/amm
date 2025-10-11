@@ -1,9 +1,20 @@
 {
   "name": "@hazbase/amm",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "An SDK helper for working with AMM stack (Factory / Router / Circuit‑Breaker‑enabled Pool)",
   "author": "IndieSquare Inc <info@hazbase.com>",
-  "keywords": ["hazBase", "backend", "amm", "defi", "web3", "typescript", "blockchain", "dapps", "evm", "ethereum"],
+  "keywords": [
+    "hazBase",
+    "backend",
+    "amm",
+    "defi",
+    "web3",
+    "typescript",
+    "blockchain",
+    "dapps",
+    "evm",
+    "ethereum"
+  ],
   "homepage": "https://lp.hazbase.com/",
   "repository": "hazbase/amm",
   "license": "Apache-2.0",
