@@ -28,9 +28,6 @@ npm i @hazbase/amm ethers
 
 ### 1) Create pool → seed liquidity → do a single‑hop swap
 ```ts
-// quickstart.ts
-// All comments in English.
-
 import { ethers } from "ethers";
 import {
   AMM,
