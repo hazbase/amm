@@ -1,6 +1,6 @@
 {
   "name": "@hazbase/amm",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "An SDK helper for working with AMM stack (Factory / Router / Circuit‑Breaker‑enabled Pool)",
   "author": "IndieSquare Inc <info@hazbase.com>",
   "keywords": [
