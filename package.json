@@ -31,9 +31,6 @@
   "dependencies": {
     "ethers": "^6.12.1"
   },
-  "peerDependencies": {
-    "@hazbase/auth": "^0.0.14"
-  },
   "scripts": {
     "build": "tsup",
     "prepublishOnly": "npm run build",
