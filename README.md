@@ -3,222 +3,228 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ## Overview
-`@hazbase/amm` is an **SDK helper** for working with AMM stack (Factory / Router / Circuit‑Breaker‑enabled Pool).
-It streamlines **pool creation, initial liquidity, quoting, single/multi‑hop swaps, fee flushing, and circuit‑breaker operations** via thin, typed wrappers around `ethers` v6.
+`@hazbase/amm` is an SDK helper for working with the hazBase AMM stack: Factory, Router, and Circuit-Breaker-enabled Pool.
+It streamlines pool creation, initial liquidity, quoting, single/multi-hop swaps, fee flushing, and circuit-breaker operations via thin, typed wrappers around `ethers` v6.
 
-**Highlights**
-- **Factory** — `createPool`, `getPool`, `setDefaults`, `upgradeImplementation`
-- **Router** — `addLiquidity` / `addLiquidityETH` / `removeLiquidity` / `swapExact*` / `quoteExactTokensForTokens`
-- **Pool** (CircuitBreakerAMM) — `mint` / `burn` / `quoteOut/quoteIn` / `currentRV` / `getReserves` / `flushFees` / `pause` / `updateParams`
-- **Unit safety** — ERC‑20 helpers cache `decimals` and provide `parse/format` + “Human” APIs to reduce unit mistakes
-- **Thenable amount (optional)** — ergonomic chaining like `await pool.balanceOf(addr).format()`
+Highlights:
+- Factory: `createPool`, `getPool`, `setDefaults`, `upgradeImplementation`
+- Router: `addLiquidity`, `addLiquidityETH`, `removeLiquidity`, `swapExact*`, `quoteExactTokensForTokens`
+- Pool: `mint`, `burn`, `quoteOut`, `quoteIn`, `currentRV`, `getReserves`, `flushFees`, `pause`, `updateParams`
+- Unit helpers: `parse`, `format`, `balanceOf().format()`, and `allowance().format()` for reducing unit mistakes
 
 ## Requirements
-- **Node.js**: 18+ (ESM recommended)
-- **Deps**: `ethers` v6
-- **Signer**: `ethers.Signer` / `JsonRpcSigner`
-- **Contracts deployed**: `AMMFactory`, `AMMRouter`, `CircuitBreakerAMM`, and `WNATIVE` on your target chain
+
+- Node.js 18+
+- `ethers` v6
+- A signer for write methods, or a provider for view methods
+- Deployed `AMMFactory`, `AMMRouter`, `CircuitBreakerAMM`, and `WNATIVE` contracts
+
+## Example environment variables
+
+The examples below assume these values are available in your environment:
+
+```dotenv
+RPC_URL=https://rpc.example.org
+PRIVATE_KEY=0x...
+TOKEN_A=0x...
+TOKEN_B=0x...
+```
 
 ## Installation
+
 ```bash
 npm i @hazbase/amm ethers
 ```
 
-## Quick start
+## Quick Start
 
-### 1) Create pool → seed liquidity → do a single‑hop swap
 ```ts
 import { ethers } from "ethers";
-import {
-  AMM,
-  Router,
-  Pool,
-} from "@hazbase/amm";
+import { AMM, Router, ERC20TokenHelper } from "@hazbase/amm";
 
-const RPC_URL      = process.env.RPC_URL!;
-const PRIVATE_KEY  = process.env.PRIVATE_KEY!;
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL!);
+const signer = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
+const to = await signer.getAddress();
 
-const TOKEN_A = "<USDC>";                       // ERC20 (e.g., USDC)
-const TOKEN_B = "<JPYC>";                       // ERC20 (e.g., JPYC)
+const chainId = 11155111;
+const tokenA = ERC20TokenHelper.attach(process.env.TOKEN_A!, signer);
+const tokenB = ERC20TokenHelper.attach(process.env.TOKEN_B!, signer);
 
-async function main() {
-  const provider = new ethers.JsonRpcProvider(RPC_URL);
-  const signer   = new ethers.Wallet(PRIVATE_KEY, provider);
-
-  const USDC = FlexibleTokenHelper.attach(TOKEN_A, signer);
-  const JPYC = FlexibleTokenHelper.attach(TOKEN_B, signer);
-
-  // AMM can optionally accept a custom factory address.
-  // If omitted, a default factory for the given chainId is used.
-  const chainId = 11155111; // example: Sepolia
-  const amm = new AMM(signer, chainId /*, optionalFactoryAddress? */);
-
-  const poolAddr = await amm.createPool({
-    tokenA  : USDC.address,
-    tokenB  : JPYC.address
-  });
-
-  const pool = await amm.pool(USDC.address, JPYC.address);
-
-  const router = new Router(signer, chainId /*, optionalRouterAddress? */);
-
-  await USDC.contract.approve(router.address, await USDC.parse(100000000n));
-  await JPYC.contract.approve(router.address, await JPYC.parse(100000000n));
-
-  const notionalA = 10_000; // 10k USDC as an example
-  const priceBA   = 150;    // 150 JPYC per 1 USDC
-
-  // --- Scale with decimals ---
-  const USDC_DEC = 6;   // common
-  const JPYC_DEC = 6;
-
-  const amountADesired = BigInt(notionalA) * BigInt(10 ** USDC_DEC);   // USDC amount
-  const amountBUnits   = BigInt(notionalA * priceBA);                  // 10,000 * 150 = 1,500,000
-  const amountBDesired = amountBUnits * BigInt(10 ** JPYC_DEC);        // JPYC amount
-
-  // --- Set conservative mins (e.g., -0.5%) ---
-  // NOTE: Router may slightly optimize amounts; set mins to avoid reverts.
-  const bps9950 = 9_950n; // 99.50%
-  const BPS     = 10_000n;
-
-  const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
-  const to       = await signer.getAddress();
-
-  const amountAMin = (amountADesired * bps9950) / BPS;
-  const amountBMin = (amountBDesired * bps9950) / BPS;
-
-  await router.addLiquidity({
-    pair: pool.address,
-    tokenA: USDC.address,
-    tokenB: JPYC.address,
-    amountADesired,
-    amountBDesired,
-    amountAMin,
-    amountBMin,
-    to,
-    deadline,
-  });
-
-  const multi = await router.quoteExactTokensForTokens({
-    amountIn: await JPYC.parse(150),
-    path: [JPYC.address, USDC.address]
-  });
-  console.log('quote:', ethers.formatUnits(multi.amountOut, 6));
-  console.log('feeBps:', multi.totalFeeBps);
-
-  const tx = await router.swapExactTokens({
-    amountIn: await JPYC.parse(150),
-    amountOutMin: 1n,
-    path: [JPYC.address, USDC.address],
-    to: deployer.address
-  });
-}
-
-main().catch(console.error);
-```
-
-### 2) One‑sided liquidity with ETH (optional)
-```ts
-// Add liquidity with ETH on one side
-await router.addLiquidityETH({
-  pair: poolAddr,
-  token: TOKEN_A,                          // the ERC20 side
-  amountTokenDesired: ethers.parseUnits("10000", 6),
-  amountTokenMin:    ethers.parseUnits("9990",  6),
-  amountETHMin:      ethers.parseUnits("50",   18),
-  to,
-  deadline,
-  value: ethers.parseUnits("50", 18),      // payable ETH
-});
-```
-
-## Network & factory selection
-You can **specify a custom Factory address** when initializing AMM/Router helpers. If **omitted**, the helper will pick a **default factory (and router) for the given `chainId`** (as embedded in the SDK). This allows:
-- Local devnets to pass freshly‑deployed addresses explicitly.
-- Public networks to rely on curated defaults out of the box.
-
-**Examples**
-```ts
-// 1) Use the default factory/router for chainId
 const amm = new AMM(signer, chainId);
 const router = new Router(signer, chainId);
 
-// 2) Force a specific factory/router
-const ammCustom = new AMM(signer, chainId, "0xYourFactoryAddress");
-const routerCustom = new Router(signer, chainId, "0xYourRouterAddress");
+const { pool: poolAddress } = await amm.createPool({
+  tokenA: tokenA.address,
+  tokenB: tokenB.address,
+});
+const pool = await amm.pool(tokenA.address, tokenB.address);
+
+await tokenA.approve(router.address, ethers.MaxUint256);
+await tokenB.approve(router.address, ethers.MaxUint256);
+
+const amountADesired = await tokenA.parse("10000");
+const amountBDesired = await tokenB.parse("1500000");
+
+const added = await router.addLiquidity({
+  pair: poolAddress,
+  tokenA: tokenA.address,
+  tokenB: tokenB.address,
+  amountADesired,
+  amountBDesired,
+  amountAMin: 0n,
+  amountBMin: 0n,
+  to,
+});
+
+console.log("LP minted", await pool.format(added.liquidity));
+
+const quote = await router.quoteExactTokensForTokens({
+  amountIn: await tokenB.parse("150"),
+  path: [tokenB.address, tokenA.address],
+});
+console.log("amountOut", await tokenA.format(quote.amountOut));
+console.log("totalFeeAmount", quote.totalFeeAmount.toString());
+
+const swap = await router.swapExactTokensForTokens({
+  amountIn: await tokenB.parse("150"),
+  amountOutMin: 1n,
+  path: [tokenB.address, tokenA.address],
+  to,
+});
+console.log("swapped", await tokenA.format(swap.amountOut));
 ```
 
-> If you override only one of them, ensure the **factory/router pair belong to the same AMM deployment** (version‑compatible).
+## Network & factory selection
 
-## Function reference (SDK)
+You can specify custom Factory and Router addresses when initializing AMM/Router helpers. If omitted, the SDK uses the default Factory and Router for the given `chainId` when available. This allows local devnets to pass freshly deployed addresses explicitly, while public networks can rely on curated defaults.
 
-> This package exports **SDK classes/functions** (no CLI).
+```ts
+const amm = new AMM(signer, 11155111);
+const router = new Router(signer, 11155111);
 
-### Factory — `AMM`
-- `createPool(tokenA: Address, tokenB: Address): Promise<TxReceipt>` — Create a pool via CREATE2 clone (no‑op if exists).
-- `getPool(tokenA: Address, tokenB: Address): Promise<Address>` — Resolve pool address if present.
-- `setDefaults(d: { baseFeeBps; feeAlphaBps; lvl1Bps; lvl2Bps; lvl3Bps; maxTxBps }): Promise<TxReceipt>` — Update defaults for **future** pools.
-- `upgradeImplementation(newImpl: Address): Promise<TxReceipt>` — Replace implementation used by future clones.
+const ammCustom = new AMM(signer, undefined, "0xFactory");
+const routerCustom = new Router(signer, undefined, "0xRouter");
+```
 
-### Router — `Router`
-- `addLiquidity(params): Promise<TxReceipt>` — Token x Token liquidity (initial ratios = initial price).
-- `addLiquidityETH(params & { value: bigint }): Promise<TxReceipt>` — Token x ETH (wraps/unwarps under the hood).
-- `removeLiquidity(params): Promise<TxReceipt>` — Burn LP and receive underlying assets.
-- `swapExactTokensForTokens(amountIn, amountOutMin, path, to, deadline): Promise<TxReceipt>` — Single/multi‑hop; min enforced on final hop.
-- `swapExactETHForTokens(amountOutMin, path, to, deadline, { value }): Promise<TxReceipt>`
-- `swapExactTokensForETH(amountIn, amountOutMin, path, to, deadline): Promise<TxReceipt>`
-- `quoteExactTokensForTokens(amountIn, path): Promise<{ amountOut: bigint; totalFeeBps: number; hops: Array<...> }>` — Quoting with per‑hop fees included.
+If you override only one of them, make sure the Factory and Router belong to the same AMM deployment.
 
-### Pool — `Pool`
-- **LP/Swap (direct pool methods if needed)** — `quoteOut(amountIn, zeroForOne)`, `quoteIn(amountOut, zeroForOne)`
-- **View** — `tokens()`, `getReserves()`, `currentRV()`
-- **Fees** — `flushFees(token, maxAmount)`, `flushNative(maxAmt)`
-- **Ops/Gov** — `pause()`, `unpause()`, `updateParams(...)` (role‑gated)
-- **Units** — `parse(number)`, `format(raw)`, and optional helpers mirroring ERC‑20 patterns
+## API Reference
 
-## Tuning `setDefaults` (parameters & suggested ranges)
-`setDefaults` configures **future pools** created by the factory. Values are expressed in **basis points (BPS)** unless noted.
+### `AMM`
 
-| Field         | Meaning                                                                 | Typical range (stable‑stable) | Typical range (volatile) | Notes |
-|---------------|-------------------------------------------------------------------------|-------------------------------|--------------------------|-------|
-| `baseFeeBps`  | Baseline swap fee applied regardless of volatility                      | 5–15 bps (0.05–0.15%)         | 20–40 bps (0.20–0.40%)   | Lower for deep, low‑vol markets; higher where MEV/latency risk is material. |
-| `feeAlphaBps` | Responsiveness of dynamic fee to realized volatility (smoothing factor) | 100–200 bps                   | 300–800 bps              | Smaller = smoother/laggier; larger = more reactive. Tune with oracle cadence. |
-| `lvl1Bps`     | Circuit‑breaker **level 1** trigger threshold (RV bucket)               | 50–100 bps (0.5–1.0%)         | 150–300 bps (1.5–3.0%)   | When exceeded → **size caps** apply (see `maxTxBps`). |
-| `lvl2Bps`     | Circuit‑breaker **level 2** threshold                                   | 150–300 bps (1.5–3.0%)        | 300–600 bps (3–6%)       | When exceeded → may **restrict direction** (one‑way only). |
-| `lvl3Bps`     | Circuit‑breaker **level 3** threshold                                   | 500–800 bps (5–8%)            | 800–1500 bps (8–15%)     | When exceeded → may **fully pause** swaps. |
-| `maxTxBps`    | Per‑transaction **size cap** as % of pool reserves                      | 200–500 bps (2–5%)            | 100–300 bps (1–3%)       | Smaller pools should use **lower caps** to limit price impact. |
+- `new AMM(runner, chainId?, factoryAddress?)`
+- `connect(runner): AMM`
+- `createPool({ tokenA, tokenB }): Promise<{ pool, receipt }>`
+- `getPool(tokenA, tokenB): Promise<Address>`
+- `pool(tokenA, tokenB): Promise<Pool>`
+- `setDefaults(defaults): Promise<TransactionReceipt>`
+- `upgradeImplementation(newImpl): Promise<TransactionReceipt>`
 
-**Guidance**
-- Start conservative, then **loosen** after observing a week of production traffic.  
-- For **stable‑stable** pairs: bias towards **lower `baseFeeBps`** and **tighter caps**.  
-- For **volatile** pairs: lift `baseFeeBps` and thresholds; keep `maxTxBps` modest to avoid large single‑trade shocks.  
-- Ensure the **oracle window** and `feeAlphaBps` interact sensibly (don’t over‑react to single‑block noise).
+`createPool` preserves the contract behavior: if a pool already exists, `AMMFactory.createPool` reverts. Use `getPool` first if you need an idempotent flow.
 
-> These are **practical starting points**, not hard rules. Your asset’s liquidity profile, oracle cadence (slot count/period), and MEV environment will shift the optimum.
+### `Router`
+
+- `new Router(runner, chainId?, routerAddress?)`
+- `connect(runner): Router`
+- `addLiquidity(params): Promise<{ amountA, amountB, liquidity, receipt }>`
+- `addLiquidityETH(params & { value }): Promise<{ amountToken, amountETH, liquidity, receipt }>`
+- `removeLiquidity(params): Promise<{ amountA, amountB, receipt }>`
+- `swapExactTokensForTokens(params): Promise<{ amountOut, receipt }>`
+- `swapExactTokens(params): Promise<{ amountOut, receipt }>`
+- `swapExactETHForTokens(params & { value? }): Promise<{ amountOut, receipt }>`
+- `swapExactTokensForETH(params): Promise<{ amountOut, receipt }>`
+- `quoteExactTokensForTokens({ amountIn, path }): Promise<{ amountOut, totalFeeAmount }>`
+
+`quoteExactTokensForTokens` returns `{ amountOut, totalFeeAmount }`. It does not synthesize `totalFeeBps`; use pool-level `quoteOut` / `quoteIn` for per-hop fee bps. When `deadline` is omitted, the SDK uses the runner provider's latest block timestamp plus 600 seconds, falling back to wall-clock time only if no provider is available.
+
+`swapExactETHForTokens` is available for deployments where the router/WNATIVE flow supports it. Test this path against your deployed router/WNATIVE pair before relying on it.
+
+### `Pool`
+
+- `Pool.attach(address, runner): Pool`
+- `connect(runner): Pool`
+- `tokens(): Promise<{ token0, token1 }>`
+- `token0()`, `token1()`
+- `getReserves(): Promise<{ reserve0, reserve1 }>`
+- `pendingFee(token): Promise<bigint>`
+- `pendingNative(): Promise<bigint>`
+- `currentRV(): Promise<number>`
+- `quoteOut({ amountIn, zeroForOne }): Promise<{ amountOut, feeBps, feeAmount }>`
+- `quoteIn({ amountOut, zeroForOne }): Promise<{ amountIn, feeBps, feeAmount }>`
+- `swapExactToken0ForToken1(params): Promise<{ amountOut, receipt }>`
+- `swapExactToken1ForToken0(params): Promise<{ amountOut, receipt }>`
+- `swapExactTokens(params): Promise<{ amountOut, receipt }>`
+- `mint(to): Promise<{ liquidity, receipt }>`
+- `burn(to): Promise<{ amount0, amount1, receipt }>`
+- `flushFees(token, maxAmount?): Promise<TransactionReceipt>`
+- `flushNative(maxAmount?): Promise<TransactionReceipt>`
+- `pause()`, `unpause()`, `updateParams(params)`
+
+`Pool` is also the LP ERC20 helper:
+
+- `parse(amountHuman)`, `format(amountRaw)`
+- `balanceOf(account).raw()`, `balanceOf(account).format()`
+- `allowance(owner, spender).raw()`, `allowance(owner, spender).format()`
+- `approve(spender, amount)`, `transfer(to, amount)`
+
+Direct `Pool.mint` and `Pool.burn` are low-level contract methods. For `mint`, transfer both underlying tokens to the pool first. For `burn`, transfer LP tokens to the pool first. Normal application flows should prefer `Router.addLiquidity` and `Router.removeLiquidity`.
+
+### `ERC20TokenHelper`
+
+`ERC20TokenHelper.attach(address, runner)` provides lightweight unit and ERC20 helpers for AMM examples:
+
+- `connect(runner)`
+- `parse`, `format`, `name`, `symbol`, `decimals`
+- `totalSupply`, `balanceOf`, `allowance`
+- `approve`, `transfer`, `transferFrom`
+
+## ETH Liquidity Example
+
+```ts
+await tokenA.approve(router.address, ethers.MaxUint256);
+
+await router.addLiquidityETH({
+  pair: poolAddress,
+  token: tokenA.address,
+  amountTokenDesired: await tokenA.parse("10000"),
+  amountTokenMin: 0n,
+  amountETHMin: ethers.parseEther("1"),
+  value: ethers.parseEther("1"),
+  to,
+});
+```
+
+## Tuning `setDefaults` / `updateParams`
+
+Values are basis points unless noted.
+
+| Field | Meaning |
+| --- | --- |
+| `baseFeeBps` | Base swap fee. |
+| `feeAlphaBps` | Dynamic fee coefficient applied to realized volatility. |
+| `lvl1Bps` | Level 1 realized-volatility threshold; also used by the pool's base trade cap. |
+| `lvl2Bps` | Level 2 threshold; may restrict direction. |
+| `lvl3Bps` | Level 3 threshold; pauses swaps through circuit-breaker checks. |
+| `maxTxBps` | Elevated-volatility max trade size. |
 
 ## Best practices
-- **Initial price equals initial ratio** — The very first `addLiquidity` ratio sets the initial price (existing liquidity fixes the price).
-- **Slippage on the last hop only** — For multi‑hop, set `minOut` on the final hop; intermediate hops should pass with `minOut=0`.
-- **Fee flushing** — If Splitter is down, fees accumulate as `pending` in the pool. Once healthy, run `flushFees/flushNative`.
-- **Circuit breaker** — Depending on realized volatility and parameters, the pool may enforce size caps, directional limits, or full stops.
-- **Unit safety** — Cache `decimals` and expose **Raw (bigint)** and **Human (string)** APIs to avoid unit mistakes.
+
+- Initial liquidity sets the initial pool price. Quote and review the ratio before the first `addLiquidity`.
+- For swaps, set `amountOutMin` from a fresh quote plus your slippage tolerance.
+- For multi-hop routes, enforce slippage on the final output amount.
+- Approve the Router for normal liquidity and swap flows; approve or transfer directly to the Pool only when using low-level `Pool.mint` / `Pool.burn`.
+- Use `pendingFee` / `pendingNative` before and after `flushFees` / `flushNative` when monitoring fee collection.
+- Circuit-breaker parameters can cap size, restrict direction, or pause swaps under elevated volatility. Start conservatively and adjust after observing real traffic.
 
 ## Troubleshooting
-- **`pool missing`** — Ensure `createPool` was called; verify token order (sorted internally by helpers).
-- **`expired`** — `deadline` is in the past. Use `Date.now()/1000 + 600`.
-- **`slippage`** — `amount*Min` too strict. Take the quote and loosen by a few BPS.
-- **`CB: paused / cap`** — Circuit breaker active (direction/size/full stop). Check parameters and reserves.
-- **`transfer amount exceeds allowance`** — Missing `approve` to Router. Use `MaxUint256` (0→MAX pattern).
-- **Flush failed** — Verify Splitter state. If `pending` grew, re‑flush after recovery.
 
-## Tip: Common imports
-```ts
-import {
-  AMM,
-  Router,
-  Pool
-} from "@hazbase/amm";
-```
+- `pool exists`: `createPool` was called for an existing pair. Use `getPool` first.
+- `pool missing`: no pool exists for a router path hop.
+- `expired`: pass a future `deadline`, or omit it to use the SDK default of now + 600 seconds.
+- `slippage`: loosen `amountOutMin`, `amountAMin`, or `amountBMin` after quoting.
+- `CB: paused` / `CB: cap`: circuit-breaker thresholds or trade size blocked the operation.
+- `transfer amount exceeds allowance`: approve the router or pool before the operation.
 
 ## License
-Apache‑2.0
+
+Apache-2.0
