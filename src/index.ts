@@ -79,6 +79,15 @@ export interface RemoveLiquidityParams {
   deadline?: BigNumberish;
 }
 
+/**
+ * NOTE on amount fields in *Result types below (amountOut/liquidity/amount0/1/…):
+ * these are PRE-FLIGHT estimates obtained from a staticCall against pre-transaction
+ * state, NOT the realized on-chain amounts from the mined receipt. Reserves can
+ * shift between the simulation and inclusion (concurrent swaps / sandwich), so the
+ * value may differ from what was actually transferred. The on-chain amountOutMin
+ * still bounds execution. For exact accounting, decode the relevant event from
+ * `receipt.logs` instead of trusting these fields.
+ */
 export interface AddLiquidityResult {
   amountA: bigint;
   amountB: bigint;
